@@ -230,13 +230,9 @@ function zipping() {
     else
       sed -i "s/kernel.string=.*/kernel.string=${KERNEL_NAME} ${SUBLEVEL} ${KERNEL_VARIANT} by ${KBUILD_BUILD_USER} for ${DEVICE_MODEL} (${DEVICE_CODENAME})/g" anykernel.sh
     fi
+    rm -rf ${KERNEL_NAME}*.zip
     zip -r9 ${KERNEL_ZIP} * -x .git README.md *placeholder
     cd ..
-
-    if [[ -f "/var/www/html/${KERNEL_ZIP}" ]]; then
-      sudo rm -rf /var/www/html/${KERNEL_ZIP}
-    fi
-    sudo mv ${AnyKernelPath}/${KERNEL_ZIP} /var/www/html/
     cleanup
 }
 
