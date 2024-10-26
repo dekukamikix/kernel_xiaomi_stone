@@ -87,6 +87,24 @@ function getclang() {
       ClangPath="${MainClangPath}"-zyc
       export PATH="${ClangPath}/bin:${PATH}"
     fi
+  elif [ "${ClangName}" = "greenforce" ]; then
+    if [ ! -f "${MainClangPath}-greenforce/bin/clang" ]; then
+      echo "[!] Clang is set to greenforce, cloning it..."
+      mkdir -p ${MainClangPath}-greenforce
+      cd clang-greenforce
+      wget -q https://raw.githubusercontent.com/greenforce-project/greenforce_clang/main/get_latest_url.sh
+      source get_latest_url.sh; rm -rf get_latest_url.sh
+      wget -q $LATEST_URL_GZ -O "greenforce-clang.tar.gz"
+      tar -xf greenforce-clang.tar.gz
+      ClangPath="${MainClangPath}"-greenforce
+      export PATH="${ClangPath}/bin:${PATH}"
+      rm -f greenforce-clang.tar.gz
+      cd ..
+    else
+      echo "[!] Clang already exists. Skipping..."
+      ClangPath="${MainClangPath}"-greenforce
+      export PATH="${ClangPath}/bin:${PATH}"
+    fi
   else
     echo "[!] Incorrect clang name. Check config.env for clang names."
     exit 1
@@ -166,7 +184,7 @@ BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 START=$(date +"%s")
 
 compile(){
-if [ "$ClangName" = "proton" ]; then
+if [ "$ClangName" = "proton" ] || [ "$ClangName" = "greenforce" ]; then
   sed -i 's/CONFIG_LLVM_POLLY=y/# CONFIG_LLVM_POLLY is not set/g' ${MainPath}/arch/$ARCH/configs/$DEVICE_DEFCONFIG || echo ""
 else
   sed -i 's/# CONFIG_LLVM_POLLY is not set/CONFIG_LLVM_POLLY=y/g' ${MainPath}/arch/$ARCH/configs/$DEVICE_DEFCONFIG || echo ""
