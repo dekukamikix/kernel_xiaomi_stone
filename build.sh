@@ -176,7 +176,7 @@ export KBUILD_BUILD_HOST="SingkoLab"
 export KERNEL_NAME="SingkoKernel"
 export SUBLEVEL="v5.4.$(cat "${MainPath}/Makefile" | grep "SUBLEVEL =" | sed 's/SUBLEVEL = *//g')"
 IMAGE="${MainPath}/out/arch/arm64/boot/Image"
-DTB_IMAGE="${MainPath}/out/arch/arm64/boot/dts/vendor/xiaomi/${DEVICE_CODENAME}.dtb"
+DTB_IMAGE="${MainPath}/out/arch/arm64/boot/dts/vendor/xiaomi/moonstone.dtb"
 CORES="$(nproc --all)"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 
@@ -209,6 +209,7 @@ make -j"$CORES" ARCH=$ARCH O=out \
       git clone --depth=1 ${AnyKernelRepo} -b ${AnyKernelBranch} ${AnyKernelPath}
       cp $IMAGE ${AnyKernelPath}
       if [[ -f "$DTB_IMAGE" ]]; then
+        rm -rf ${AnyKernelPath}/dtb
         cp $DTB_IMAGE ${AnyKernelPath}/dtb
       fi
    else
