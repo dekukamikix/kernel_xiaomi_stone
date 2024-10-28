@@ -235,6 +235,7 @@ function zipping() {
     fi
     zip -r9 "${VARIANT}${KERNEL_ZIP}" * -x .git README.md *placeholder
     cd ..
+    sudo rm -rf ${AnyKernelPath}
     cleanup
 }
 
@@ -242,7 +243,6 @@ function zipping() {
 function cleanup() {
     cd ${MainPath}
     if [ "$CLEANUP" = "yes" ];then
-      sudo rm -rf ${AnyKernelPath}
       sudo rm -rf out/
     fi
 }
