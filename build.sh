@@ -234,6 +234,7 @@ function zipping() {
       sed -i "s/kernel.string=.*/kernel.string=${KERNEL_NAME} ${SUBLEVEL} ${KERNEL_VARIANT} by ${KBUILD_BUILD_USER} for ${DEVICE_MODEL} (${DEVICE_CODENAME})/g" anykernel.sh
     fi
     zip -r9 "${VARIANT}${KERNEL_ZIP}" * -x .git README.md *placeholder
+    mv "${VARIANT}${KERNEL_ZIP}" ~/
     cd ..
     sudo rm -rf ${AnyKernelPath}
     cleanup
