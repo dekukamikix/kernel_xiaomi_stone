@@ -168,7 +168,7 @@ function kernelsu() {
 # Enviromental variable
 DEVICE_MODEL="Redmi Note 12 5G/POCO X5 5G"
 DEVICE_CODENAME="stone"
-BUILD_TIME="$(TZ="Asia/Jakarta" date "+%m%d%Y")"
+BUILD_TIME="$(TZ="Asia/Jakarta" date "+%Y%m%d")"
 export DEVICE_DEFCONFIG="stone_defconfig"
 export ARCH="arm64"
 export KBUILD_BUILD_USER="nullptr03"
@@ -227,12 +227,13 @@ KERNEL_ZIP="${KERNEL_NAME}-${DEVICE_CODENAME}-${BUILD_TIME}.zip"
 function zipping() {
     cd ${AnyKernelPath} || exit 1
     if [ "$KERNELSU" = "yes" ];then
+      VARIANT="[KSU] "
       sed -i "s/kernel.string=.*/kernel.string=${KERNEL_NAME} ${SUBLEVEL} ${KERNEL_VARIANT} by ${KBUILD_BUILD_USER} for ${DEVICE_MODEL} (${DEVICE_CODENAME}) | KernelSU Version: ${KERNELSU_VERSION}/g" anykernel.sh
     else
+      VARIANT="[Non-KSU] "
       sed -i "s/kernel.string=.*/kernel.string=${KERNEL_NAME} ${SUBLEVEL} ${KERNEL_VARIANT} by ${KBUILD_BUILD_USER} for ${DEVICE_MODEL} (${DEVICE_CODENAME})/g" anykernel.sh
     fi
-    rm -rf ${KERNEL_NAME}*.zip
-    zip -r9 ${KERNEL_ZIP} * -x .git README.md *placeholder
+    zip -r9 "${VARIANT}${KERNEL_ZIP}" * -x .git README.md *placeholder
     cd ..
     cleanup
 }
