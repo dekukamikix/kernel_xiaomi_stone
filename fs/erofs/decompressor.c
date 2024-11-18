@@ -200,9 +200,12 @@ static int z_erofs_lz4_decompress(struct z_erofs_decompress_req *rq, u8 *out,
 	const uint nrpages_out = PAGE_ALIGN(rq->pageofs_out +
 					    rq->outputsize) >> PAGE_SHIFT;
 	unsigned int inputmargin, inlen;
-	u8 *src, *src2;
+	u8 *headpage, *src, *src2;
 	bool copied, support_0padding;
-	int ret;
+	int ret, maptype;
+
+	DBG_BUGON(*rq->in == NULL);
+	headpage = kmap_atomic(*rq->in);
 
 	if (rq->inputsize > PAGE_SIZE)
 		return -EOPNOTSUPP;
@@ -243,16 +246,15 @@ static int z_erofs_lz4_decompress(struct z_erofs_decompress_req *rq, u8 *out,
 		}
 	}
 
-		print_hex_dump(KERN_DEBUG, "[ in]: ", DUMP_PREFIX_OFFSET,
-			       16, 1, src + inputmargin, rq->inputsize, true);
-		print_hex_dump(KERN_DEBUG, "[out]: ", DUMP_PREFIX_OFFSET,
-			       16, 1, out, rq->outputsize, true);
+	print_hex_dump(KERN_DEBUG, "[ in]: ", DUMP_PREFIX_OFFSET,
+		       16, 1, src + inputmargin, rq->inputsize, true);
+	print_hex_dump(KERN_DEBUG, "[out]: ", DUMP_PREFIX_OFFSET,
+		       16, 1, out, rq->outputsize, true);
 
-		if (ret >= 0)
-			memset(out + ret, 0, rq->outputsize - ret);
-		ret = -EIO;
-	}
-
+	if (ret >= 0)
+		memset(out + ret, 0, rq->outputsize - ret);
+	ret = -EIO;
+	
 	if (copied)
 		erofs_put_pcpubuf(src);
 	else
