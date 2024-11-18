@@ -166,7 +166,7 @@ function kernelsu() {
 }
 
 # Enviromental variable
-DEVICE_MODEL="Poco X5 5G"
+DEVICE_MODEL="Poco X5 5G & Redmi Note 12 5G"
 DEVICE_CODENAME="stone"
 BUILD_TIME="$(TZ="Asia/Jakarta" date "+%Y%m%d")"
 export DEVICE_DEFCONFIG="stone_defconfig"
@@ -221,20 +221,20 @@ make -j"$CORES" ARCH=$ARCH O=out \
    fi
 }
 
-KERNEL_ZIP="${KERNEL_NAME}-${DEVICE_CODENAME}-${BUILD_TIME}.zip"
+KERNEL_ZIP="${KERNEL_NAME}-${DEVICE_CODENAME}-${BUILD_TIME}"
 
 # Zipping function
 function zipping() {
     cd ${AnyKernelPath} || exit 1
     if [ "$KERNELSU" = "yes" ];then
-      VARIANT="[KSU] "
-      sed -i "s/kernel.string=.*/kernel.string=${KERNEL_NAME} ${SUBLEVEL} ${KERNEL_VARIANT} by ${KBUILD_BUILD_USER} for ${DEVICE_MODEL} (${DEVICE_CODENAME}) | KernelSU Version: ${KERNELSU_VERSION}/g" anykernel.sh
+      VARIANT="-KernelSU"
+      sed -i "s/kernel.string=.*/kernel.string=${KERNEL_NAME} ${SUBLEVEL} ${KERNEL_VARIANT} by ${KBUILD_BUILD_USER} for ${DEVICE_MODEL} (${DEVICE_CODENAME})/g" anykernel.sh
     else
-      VARIANT="[Non-KSU] "
+      VARIANT="-no-KernelSU"
       sed -i "s/kernel.string=.*/kernel.string=${KERNEL_NAME} ${SUBLEVEL} ${KERNEL_VARIANT} by ${KBUILD_BUILD_USER} for ${DEVICE_MODEL} (${DEVICE_CODENAME})/g" anykernel.sh
     fi
-    zip -r9 "${VARIANT}${KERNEL_ZIP}" * -x .git README.md *placeholder
-    mv "${VARIANT}${KERNEL_ZIP}" ~/
+    zip -r9 "${KERNEL_ZIP}${VARIANT}.zip" * -x .git README.md *placeholder
+    mv "${KERNEL_ZIP}${VARIANT}.zip" ~/
     cd ..
     sudo rm -rf ${AnyKernelPath}
     cleanup
