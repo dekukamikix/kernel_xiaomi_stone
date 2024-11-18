@@ -264,7 +264,7 @@ static inline void __user *__uaccess_mask_ptr(const void __user *ptr)
 	"	b	2b\n"						\
 	"	.previous\n"						\
 	_ASM_EXTABLE(1b, 3b)						\
-	: "+r" (err), "=&r" (x)						\
+	: "+r" (err), "=r" (x)						\
 	: "r" (addr), "i" (-EFAULT))
 
 #define __raw_get_user(x, ptr, err)					\
@@ -329,7 +329,7 @@ do {									\
 	"	.previous\n"						\
 	_ASM_EXTABLE(1b, 3b)						\
 	: "+r" (err)							\
-	: "r" (x), "r" (addr), "i" (-EFAULT))
+	: "rZ" (x), "r" (addr), "i" (-EFAULT))
 
 #define __raw_put_user(x, ptr, err)					\
 do {									\

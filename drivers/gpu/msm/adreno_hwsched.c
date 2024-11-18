@@ -454,8 +454,6 @@ static int hwsched_sendcmds(struct adreno_device *adreno_dev,
 			break;
 		}
 
-		drawctxt->submitted_timestamp = timestamp;
-
 		count++;
 	}
 
@@ -672,7 +670,6 @@ static inline int _verify_cmdobj(struct kgsl_device_private *dev_priv,
 		struct kgsl_context *context, struct kgsl_drawobj *drawobj[],
 		uint32_t count)
 {
-	struct kgsl_device *device = dev_priv->device;
 	struct kgsl_memobj_node *ib;
 	unsigned int i;
 
@@ -685,13 +682,6 @@ static inline int _verify_cmdobj(struct kgsl_device_private *dev_priv,
 				if (!_verify_ib(dev_priv,
 					&ADRENO_CONTEXT(context)->base, ib))
 					return -EINVAL;
-
-			/*
-			 * Clear the wake on touch bit to indicate an IB has
-			 * been submitted since the last time we set it.
-			 * But only clear it when we have rendering commands.
-			 */
-			device->flags &= ~KGSL_FLAG_WAKE_ON_TOUCH;
 		}
 	}
 
@@ -752,7 +742,6 @@ static void _queue_drawobj(struct adreno_context *drawctxt,
 	drawctxt->drawqueue_tail = (drawctxt->drawqueue_tail + 1) %
 			ADRENO_CONTEXT_DRAWQUEUE_SIZE;
 	drawctxt->queued++;
-	trace_adreno_cmdbatch_queued(drawobj, drawctxt->queued);
 }
 
 static int _queue_cmdobj(struct adreno_device *adreno_dev,

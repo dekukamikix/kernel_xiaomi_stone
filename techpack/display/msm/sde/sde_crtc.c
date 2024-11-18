@@ -43,6 +43,11 @@
 #include "sde_trace.h"
 #include "sde_vm.h"
 
+#ifdef CONFIG_DRM_SDE_EXPO
+#include "dsi_display.h"
+#include "dsi_panel.h"
+#endif
+
 #define SDE_PSTATES_MAX (SDE_STAGE_MAX * 4)
 #define SDE_MULTIRECT_PLANE_MAX (SDE_STAGE_MAX * 2)
 
@@ -1558,6 +1563,15 @@ static void _sde_crtc_blend_setup_mixer(struct drm_crtc *crtc,
 						mixer, &cstate->dim_layer[i]);
 			clear_bit(SDE_CRTC_DIRTY_DIM_LAYERS, cstate->dirty);
 		}
+#ifdef CONFIG_DRM_SDE_EXPO
+		if (test_bit(SDE_CRTC_DIRTY_DIM_LAYER_EXPO, cstate->dirty)) {
+			if (cstate->exposure_dim_layer) {
+				_sde_crtc_setup_dim_layer_cfg(crtc, sde_crtc,
+						mixer, cstate->exposure_dim_layer);
+			}
+			clear_bit(SDE_CRTC_DIRTY_DIM_LAYER_EXPO, cstate->dirty);
+		}
+#endif
 	}
 }
 
@@ -2208,8 +2222,6 @@ static void sde_crtc_frame_event_cb(void *data, u32 event)
 	struct msm_drm_private *priv;
 	struct sde_crtc_frame_event *fevent;
 	struct sde_kms_frame_event_cb_data *cb_data;
-	struct drm_plane *plane;
-	u32 ubwc_error;
 	unsigned long flags;
 	u32 crtc_id;
 
@@ -2239,34 +2251,9 @@ static void sde_crtc_frame_event_cb(void *data, u32 event)
 	spin_unlock_irqrestore(&sde_crtc->fevent_spin_lock, flags);
 
 	if (!fevent) {
-		SDE_ERROR("crtc%d event %d overflow\n",
-				crtc->base.id, event);
+		SDE_ERROR("crtc%d event %d overflow\n", DRMID(crtc), event);
 		SDE_EVT32(DRMID(crtc), event);
 		return;
-	}
-
-	/* log and clear plane ubwc errors if any */
-	if (event & (SDE_ENCODER_FRAME_EVENT_ERROR
-				| SDE_ENCODER_FRAME_EVENT_PANEL_DEAD
-				| SDE_ENCODER_FRAME_EVENT_DONE)) {
-		drm_for_each_plane_mask(plane, crtc->dev,
-						sde_crtc->plane_mask_old) {
-			ubwc_error = sde_plane_get_ubwc_error(plane);
-			if (ubwc_error) {
-				SDE_EVT32(DRMID(crtc), DRMID(plane),
-						ubwc_error, SDE_EVTLOG_ERROR);
-				SDE_DEBUG("crtc%d plane %d ubwc_error %d\n",
-						DRMID(crtc), DRMID(plane),
-						ubwc_error);
-				sde_plane_clear_ubwc_error(plane);
-			}
-		}
-	}
-
-	if ((event & SDE_ENCODER_FRAME_EVENT_SIGNAL_RETIRE_FENCE) &&
-		(sde_crtc && sde_crtc->retire_frame_event_sf)) {
-		sde_crtc->retire_frame_event_time = ktime_get();
-		sysfs_notify_dirent(sde_crtc->retire_frame_event_sf);
 	}
 
 	fevent->event = event;
@@ -2462,6 +2449,9 @@ static void sde_crtc_frame_event_work(struct kthread_work *work)
 	struct sde_kms *sde_kms;
 	unsigned long flags;
 	bool in_clone_mode = false;
+	int ret;
+	struct drm_plane *plane;
+	u32 ubwc_error;
 
 	if (!work) {
 		SDE_ERROR("invalid work handle\n");
@@ -2496,6 +2486,28 @@ static void sde_crtc_frame_event_work(struct kthread_work *work)
 	if (!in_clone_mode && (fevent->event & (SDE_ENCODER_FRAME_EVENT_ERROR
 					| SDE_ENCODER_FRAME_EVENT_PANEL_DEAD
 					| SDE_ENCODER_FRAME_EVENT_DONE))) {
+
+		ret = pm_runtime_resume_and_get(crtc->dev->dev);
+		if (ret < 0) {
+			SDE_ERROR("failed to enable power resource %d\n", ret);
+			SDE_EVT32(ret, SDE_EVTLOG_ERROR);
+		} else {
+			/* log and clear plane ubwc errors if any */
+			drm_for_each_plane_mask(plane, crtc->dev,
+						sde_crtc->plane_mask_old) {
+				ubwc_error = sde_plane_get_ubwc_error(plane);
+				if (ubwc_error) {
+					SDE_EVT32(DRMID(crtc), DRMID(plane),
+					ubwc_error, SDE_EVTLOG_ERROR);
+					SDE_DEBUG("crtc%d plane %d ubwc_error %d\n",
+					DRMID(crtc), DRMID(plane),
+					ubwc_error);
+					sde_plane_clear_ubwc_error(plane);
+				}
+			}
+			pm_runtime_put_sync(crtc->dev->dev);
+		}
+
 		if (atomic_read(&sde_crtc->frame_pending) < 1) {
 			/* this should not happen */
 			SDE_ERROR("crtc%d ts:%lld invalid frame_pending:%d\n",
@@ -2526,11 +2538,17 @@ static void sde_crtc_frame_event_work(struct kthread_work *work)
 		SDE_ATRACE_END("signal_release_fence");
 	}
 
-	if (fevent->event & SDE_ENCODER_FRAME_EVENT_SIGNAL_RETIRE_FENCE)
+	if (fevent->event & SDE_ENCODER_FRAME_EVENT_SIGNAL_RETIRE_FENCE) {
+		if (sde_crtc->retire_frame_event_sf) {
+			sde_crtc->retire_frame_event_time = fevent->ts;
+			sysfs_notify_dirent(sde_crtc->retire_frame_event_sf);
+		}
+
 		/* this api should be called without spin_lock */
 		_sde_crtc_retire_event(fevent->connector, fevent->ts,
 				(fevent->event & SDE_ENCODER_FRAME_EVENT_ERROR)
 				? SDE_FENCE_SIGNAL_ERROR : SDE_FENCE_SIGNAL);
+	}
 
 	if (fevent->event & SDE_ENCODER_FRAME_EVENT_PANEL_DEAD)
 		SDE_ERROR("crtc%d ts:%lld received panel dead event\n",
@@ -2668,6 +2686,53 @@ static void _sde_crtc_set_dim_layer_v1(struct drm_crtc *crtc,
 clear:
 	set_bit(SDE_CRTC_DIRTY_DIM_LAYERS, cstate->dirty);
 }
+
+#ifdef CONFIG_DRM_SDE_EXPO
+static int sde_crtc_config_exposure_dim_layer(struct drm_crtc_state *crtc_state, int stage)
+{
+	struct sde_kms *kms;
+	struct sde_hw_dim_layer *dim_layer;
+	struct sde_crtc_state *cstate = to_sde_crtc_state(crtc_state);
+	struct drm_display_mode *mode = &crtc_state->adjusted_mode;
+	int alpha = sde_crtc_get_property(cstate, CRTC_PROP_DIM_LAYER_EXPO);
+	struct dsi_display *dsi_display = get_main_display();
+	struct dsi_panel *panel = dsi_display->panel;
+
+	kms = _sde_crtc_get_kms(crtc_state->crtc);
+	if (!kms || !kms->catalog) {
+		return -EINVAL;
+	}
+
+	if (cstate->num_dim_layers == SDE_MAX_DIM_LAYERS - 1) {
+		pr_err("failed to get available dim layer for exposure\n");
+		return -EINVAL;
+	}
+
+	if (!alpha) {
+		cstate->exposure_dim_layer = NULL;
+		return 0;
+	}
+
+	if ((stage + SDE_STAGE_0) >= kms->catalog->mixer[0].sblk->maxblendstages) {
+		return -EINVAL;
+	}
+
+	dim_layer = &cstate->dim_layer[cstate->num_dim_layers];
+	dim_layer->flags = SDE_DRM_DIM_LAYER_INCLUSIVE;
+	dim_layer->stage = stage + SDE_STAGE_0;
+
+	dim_layer->rect.x = 0;
+	dim_layer->rect.y = 0;
+	dim_layer->rect.w = mode->hdisplay;
+	dim_layer->rect.h = mode->vdisplay;
+	dim_layer->color_fill = (struct sde_mdss_color) {0, 0, 0, alpha};
+	cstate->exposure_dim_layer = dim_layer;
+
+	set_bit(SDE_CRTC_DIRTY_DIM_LAYER_EXPO, cstate->dirty);
+
+	return 0;
+}
+#endif
 
 /**
  * _sde_crtc_set_dest_scaler - copy dest scaler settings from userspace
@@ -3801,8 +3866,6 @@ void sde_crtc_commit_kickoff(struct drm_crtc *crtc,
 	}
 	sde_crtc->play_count++;
 
-	sde_vbif_clear_errors(sde_kms);
-
 	if (is_error) {
 		_sde_crtc_remove_pipe_flush(crtc);
 		_sde_crtc_blend_setup(crtc, old_state, false);
@@ -3997,6 +4060,9 @@ void sde_crtc_reset_sw_state(struct drm_crtc *crtc)
 
 	/* mark other properties which need to be dirty for next update */
 	set_bit(SDE_CRTC_DIRTY_DIM_LAYERS, &sde_crtc->revalidate_mask);
+#ifdef CONFIG_DRM_SDE_EXPO
+	set_bit(SDE_CRTC_DIRTY_DIM_LAYER_EXPO, cstate->dirty);
+#endif
 	if (cstate->num_ds_enabled)
 		set_bit(SDE_CRTC_DIRTY_DEST_SCALER, cstate->dirty);
 }
@@ -4810,6 +4876,34 @@ static int _sde_crtc_check_get_pstates(struct drm_crtc *crtc,
 	return rc;
 }
 
+#ifdef CONFIG_DRM_SDE_EXPO
+static int sde_crtc_exposure_atomic_check(struct sde_crtc_state *cstate,
+		struct plane_state *pstates, int cnt)
+{
+	int i, zpos = 0;
+        struct dsi_display *dsi_display = get_main_display();
+        struct dsi_panel *panel = dsi_display->panel;
+
+	if (!panel->dimlayer_exposure) {
+		cstate->exposure_dim_layer = NULL;
+		return 0;
+	}
+
+	for (i = 0; i < cnt; i++) {
+		if (pstates[i].stage > zpos)
+			zpos = pstates[i].stage;
+	}
+	zpos++;
+
+	if (sde_crtc_config_exposure_dim_layer(&cstate->base, zpos)) {
+		SDE_ERROR("Failed to config dim layer\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+#endif
+
 static int _sde_crtc_check_zpos(struct drm_crtc_state *state,
 		struct sde_crtc *sde_crtc,
 		struct plane_state *pstates,
@@ -4911,6 +5005,12 @@ static int _sde_crtc_atomic_check_pstates(struct drm_crtc *crtc,
 			plane, multirect_plane, &cnt);
 	if (rc)
 		return rc;
+
+#ifdef CONFIG_DRM_SDE_EXPO
+	rc = sde_crtc_exposure_atomic_check(cstate, pstates, cnt);
+	if (rc)
+		return rc;
+#endif
 
 	/* assign mixer stages based on sorted zpos property */
 	rc = _sde_crtc_check_zpos(state, sde_crtc, pstates, cstate, mode, cnt);
@@ -5470,6 +5570,11 @@ static void sde_crtc_install_properties(struct drm_crtc *crtc,
 		sde_crtc_install_dest_scale_properties(sde_crtc, catalog,
 				info);
 
+#ifdef CONFIG_DRM_SDE_EXPO
+	msm_property_install_volatile_range(&sde_crtc->property_info,
+			"dim_layer_exposure", 0x0, 0, ~0, 0, CRTC_PROP_DIM_LAYER_EXPO);
+#endif
+
 	if (catalog->dspp_count && catalog->rc_count)
 		sde_kms_info_add_keyint(info, "rc_mem_size",
 				catalog->dspp[0].sblk->rc.mem_total_size);
@@ -5547,7 +5652,7 @@ static int sde_crtc_atomic_set_property(struct drm_crtc *crtc,
 	uint64_t fence_user_fd;
 	uint64_t __user prev_user_fd;
 
-	if (!crtc || !state || !property) {
+	if (unlikely(!crtc || !state || !property)) {
 		SDE_ERROR("invalid argument(s)\n");
 		return -EINVAL;
 	}
@@ -5558,13 +5663,13 @@ static int sde_crtc_atomic_set_property(struct drm_crtc *crtc,
 	SDE_ATRACE_BEGIN("sde_crtc_atomic_set_property");
 	/* check with cp property system first */
 	ret = sde_cp_crtc_set_property(crtc, property, val);
-	if (ret != -ENOENT)
+	if (unlikely(ret != -ENOENT))
 		goto exit;
 
 	/* if not handled by cp, check msm_property system */
 	ret = msm_property_atomic_set(&sde_crtc->property_info,
 			&cstate->property_state, property, val);
-	if (ret)
+	if (unlikely(ret))
 		goto exit;
 
 	idx = msm_property_index(&sde_crtc->property_info, property);
@@ -5602,7 +5707,7 @@ static int sde_crtc_atomic_set_property(struct drm_crtc *crtc,
 		cstate->bw_split_vote = true;
 		break;
 	case CRTC_PROP_OUTPUT_FENCE:
-		if (!val)
+		if (unlikely(!val))
 			goto exit;
 
 		ret = copy_from_user(&prev_user_fd, (void __user *)val,
@@ -5620,14 +5725,14 @@ static int sde_crtc_atomic_set_property(struct drm_crtc *crtc,
 		if (prev_user_fd == -1) {
 			ret = _sde_crtc_get_output_fence(crtc, state,
 					&fence_user_fd);
-			if (ret) {
+			if (unlikely(ret)) {
 				SDE_ERROR("fence create failed rc:%d\n", ret);
 				goto exit;
 			}
 
 			ret = copy_to_user((uint64_t __user *)(uintptr_t)val,
 					&fence_user_fd, sizeof(uint64_t));
-			if (ret) {
+			if (unlikely(ret)) {
 				SDE_ERROR("copy to user failed rc:%d\n", ret);
 				put_unused_fd(fence_user_fd);
 				ret = -EFAULT;

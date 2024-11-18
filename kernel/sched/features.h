@@ -38,12 +38,13 @@ SCHED_FEAT(CACHE_HOT_BUDDY, true)
 SCHED_FEAT(WAKEUP_PREEMPTION, true)
 
 SCHED_FEAT(HRTICK, false)
+SCHED_FEAT(HRTICK_DL, false)
 SCHED_FEAT(DOUBLE_TICK, false)
 
 /*
  * Decrement CPU capacity based on time not spent running tasks
  */
-SCHED_FEAT(NONTASK_CAPACITY, true)
+SCHED_FEAT(NONTASK_CAPACITY, false)
 
 /*
  * Queue remote wakeups on the target CPU and process them
@@ -54,7 +55,6 @@ SCHED_FEAT(TTWU_QUEUE, false)
 /*
  * When doing wakeups, attempt to limit superfluous scans of the LLC domain.
  */
-SCHED_FEAT(SIS_AVG_CPU, false)
 SCHED_FEAT(SIS_PROP, true)
 
 /*
@@ -64,7 +64,7 @@ SCHED_FEAT(SIS_PROP, true)
  */
 SCHED_FEAT(WARN_DOUBLE_CLOCK, false)
 
-#ifdef HAVE_RT_PUSH_IPI
+#if defined(CONFIG_IRQ_WORK) && defined(CONFIG_SMP)
 /*
  * In order to avoid a thundering herd attack of CPUs that are
  * lowering their priorities at the same time, and there being

@@ -15,8 +15,6 @@
 #define DEBUG
 #define pr_fmt(fmt)		KBUILD_MODNAME ": " fmt
 
-// #define GOODIX_DRM_INTERFACE_WA
-
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/ioctl.h>
@@ -39,15 +37,10 @@
 #include <linux/regulator/consumer.h>
 #include <linux/of_gpio.h>
 #include <linux/timer.h>
-#include <linux/notifier.h>
 #include <linux/fb.h>
 #include <linux/pm_qos.h>
 #include <linux/cpufreq.h>
 #include <linux/pm_wakeup.h>
-#include <drm/drm_bridge.h>
-#ifndef GOODIX_DRM_INTERFACE_WA
-#include <drm/drm_notifier.h>
-#endif
 
 #include "gf_spi.h"
 extern int gf_hw_reset(struct gf_dev *gf_dev, unsigned int delay_ms);
@@ -72,7 +65,6 @@ extern int netlink_init(void);
 #define PATCH_LEVEL 1
 
 #define WAKELOCK_HOLD_TIME 2000	/* in ms */
-#define FP_UNLOCK_REJECTION_TIMEOUT (WAKELOCK_HOLD_TIME - 500)
 
 #define GF_SPIDEV_NAME	   "goodix,fingerprint"
 /*device name after register in charater*/
@@ -334,48 +326,9 @@ static void nav_event_input(struct gf_dev *gf_dev, gf_nav_event_t nav_event)
 	}
 }
 
-static void gf_kernel_key_input(struct gf_dev *gf_dev, struct gf_key *gf_key)
-{
-	uint32_t key_input = 0;
-
-	if (GF_KEY_HOME_DOUBLE_CLICK == gf_key->key) {
-		key_input = GF_KEY_INPUT_DOUBLE;
-	} else if (GF_KEY_POWER == gf_key->key) {
-		key_input = GF_KEY_INPUT_POWER;
-	} else if (GF_KEY_CAMERA == gf_key->key) {
-		key_input = GF_KEY_INPUT_CAMERA;
-	}else if (GF_KEY_HOME == gf_key->key){
-		key_input = GF_KEY_INPUT_HOME;
-	} else {
-		/* add special key define */
-		key_input = gf_key->key;
-	}
-	pr_debug("%s: received key event[%d], key=%d, value=%d\n",
-		 __func__, key_input, gf_key->key, gf_key->value);
-
-		if(GF_KEY_HOME_DOUBLE_CLICK == gf_key->key){
-			input_report_key(gf_dev->input, key_input, gf_key->value);
-		    input_sync(gf_dev->input);
-		}
-
-	if ((GF_KEY_POWER == gf_key->key || GF_KEY_CAMERA == gf_key->key)
-	    && (gf_key->value == 1)) {
-		input_report_key(gf_dev->input, key_input, 1);
-		input_sync(gf_dev->input);
-		input_report_key(gf_dev->input, key_input, 0);
-		input_sync(gf_dev->input);
-	}
-
-	if (GF_KEY_HOME == gf_key->key) {
-		input_report_key(gf_dev->input, key_input, gf_key->value);
-		input_sync(gf_dev->input);
-	}
-}
-
 static long gf_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct gf_dev *gf_dev = &gf;
-	struct gf_key gf_key;
 #if defined(SUPPORT_NAV_EVENT)
 	gf_nav_event_t nav_event = GF_NAV_NONE;
 #endif
@@ -392,18 +345,6 @@ static long gf_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		retval = !access_ok((void __user *)arg, _IOC_SIZE(cmd));
 	if (retval)
 		return -EFAULT;
-
-	if (gf_dev->device_available == 0) {
-		if ((cmd == GF_IOC_ENABLE_POWER)
-		    || (cmd == GF_IOC_DISABLE_POWER)) {
-			pr_debug("power cmd\n");
-		} else {
-			pr_debug
-			    ("get cmd %d, but sensor is power off currently.\n",
-			     _IOC_NR(cmd));
-			return -ENODEV;
-		}
-	}
 
 	switch (cmd) {
 	case GF_IOC_INIT:
@@ -428,17 +369,6 @@ static long gf_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	case GF_IOC_RESET:
 		pr_debug("%s GF_IOC_RESET.\n", __func__);
 		gf_hw_reset(gf_dev, 3);
-		break;
-	case GF_IOC_INPUT_KEY_EVENT:
-		if (copy_from_user
-		    (&gf_key, (struct gf_key *)arg, sizeof(struct gf_key))) {
-			pr_debug
-			    ("Failed to copy input key event from user to kernel\n");
-			retval = -EFAULT;
-			break;
-		}
-
-		gf_kernel_key_input(gf_dev, &gf_key);
 		break;
 #if defined(SUPPORT_NAV_EVENT)
 	case GF_IOC_NAV_EVENT:
@@ -468,19 +398,11 @@ static long gf_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		break;
 	case GF_IOC_ENABLE_POWER:
 		pr_debug("%s GF_IOC_ENABLE_POWER\n", __func__);
-		if (gf_dev->device_available == 1)
-			pr_debug("Sensor has already powered-on.\n");
-		else
-			gf_power_on(gf_dev);
-		gf_dev->device_available = 1;
+		gf_power_on(gf_dev);
 		break;
 	case GF_IOC_DISABLE_POWER:
 		pr_debug("%s GF_IOC_DISABLE_POWER\n", __func__);
-		if (gf_dev->device_available == 0)
-			pr_debug("Sensor has already powered-off.\n");
-		else
-			gf_power_off(gf_dev);
-		gf_dev->device_available = 0;
+		gf_power_off(gf_dev);
 		break;
 	case GF_IOC_ENTER_SLEEP_MODE:
 		pr_debug("%s GF_IOC_ENTER_SLEEP_MODE\n", __func__);
@@ -521,22 +443,12 @@ static long gf_compat_ioctl(struct file *filp, unsigned int cmd,
 
 static irqreturn_t gf_irq(int irq, void *handle)
 {
-	struct gf_dev *gf_dev = &gf;
 #if defined(GF_NETLINK_ENABLE)
 	char temp[4] = { 0x0 };
 	temp[0] = GF_NET_EVENT_IRQ;
 	__pm_wakeup_event(&fp_wakelock, WAKELOCK_HOLD_TIME);
 	sendnlmsg(temp);
 	pr_debug("%s start \n", __func__);
-
-#ifndef GOODIX_DRM_INTERFACE_WA
-	pr_debug("%s %d,%d,%d\n",__func__,gf_dev->wait_finger_down,gf_dev->device_available,gf_dev->fb_black);
-	if ((gf_dev->wait_finger_down == true) && (gf_dev->device_available == 1) && (gf_dev->fb_black == 1))
-	{
-		gf_dev->wait_finger_down = false;
-		pr_debug("%s schedule_work\n", __func__);
-	}
-#endif
 
 #elif defined (GF_FASYNC)
 	struct gf_dev *gf_dev = &gf;
@@ -672,7 +584,6 @@ static int gf_release(struct inode *inode, struct file *filp)
 		pr_debug("disble_irq. irq = %d\n", gf_dev->irq);
 		gf_disable_irq(gf_dev);
 		/*power off the sensor */
-		gf_dev->device_available = 0;
 		free_irq(gf_dev->irq, gf_dev);
 		//gpio_free(gf_dev->irq_gpio);
 		//gpio_free(gf_dev->reset_gpio);
@@ -722,9 +633,6 @@ static int gf_probe(struct platform_device *pdev)
 	gf_dev->irq_gpio = -EINVAL;
 	gf_dev->reset_gpio = -EINVAL;
 	gf_dev->pwr_gpio = -EINVAL;
-	gf_dev->device_available = 0;
-	gf_dev->fb_black = 0;
-	gf_dev->wait_finger_down = false;
 
 	// if (gf_parse_dts(gf_dev))
 	// 	goto error_hw;
@@ -817,7 +725,6 @@ error_dev:
 	}
 error_hw:
 	gf_cleanup(gf_dev);
-	gf_dev->device_available = 0;
 
 	return status;
 }

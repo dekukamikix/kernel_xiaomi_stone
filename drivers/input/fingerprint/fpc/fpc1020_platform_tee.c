@@ -38,16 +38,10 @@
 #include <linux/pinctrl/consumer.h>
 #include <linux/pm_wakeup.h>
 #include <linux/fb.h>
-#include <drm/drm_notifier.h>
-#include <drm/drm_bridge.h>
-#ifdef CONFIG_HQ_SYSFS_SUPPORT
-#include <linux/hqsysfs.h>
-#endif
 
 #define CONFIG_FPC_COMPAT 1
 #define FINGER_PWR_USE_GPIO 1
 #define FPC_TTW_HOLD_TIME 2000
-#define FP_UNLOCK_REJECTION_TIMEOUT (FPC_TTW_HOLD_TIME - 500)
 
 #define RESET_LOW_SLEEP_MIN_US 5000
 #define RESET_LOW_SLEEP_MAX_US (RESET_LOW_SLEEP_MIN_US + 100)
@@ -59,10 +53,6 @@
 #define PWR_ON_SLEEP_MAX_US (PWR_ON_SLEEP_MIN_US + 900)
 
 #define NUM_PARAMS_REG_ENABLE_SET 2
-
-#define RELEASE_WAKELOCK_W_V "release_wakelock_with_verification"
-#define RELEASE_WAKELOCK "release_wakelock"
-#define START_IRQS_RECEIVED_CNT "start_irqs_received_counter"
 
 static const char * const pctl_names[] = {
 	"fpc1020_reset_reset",
@@ -94,8 +84,6 @@ struct fpc1020_data {
 	int irq_gpio;
 	int rst_gpio;
 	int vdd_gpio;
-	int nbr_irqs_received;
-	int nbr_irqs_received_counter_start;
 
 	struct mutex lock; /* To set/get exported values in sysfs */
 	bool prepared;
@@ -103,10 +91,6 @@ struct fpc1020_data {
 	bool compatible_enabled;
 #endif
 	atomic_t wakeup_enabled; /* Used both in ISR and non-ISR */
-	struct notifier_block fb_notifier;
-	bool fb_black;
-	bool wait_finger_down;
-	struct work_struct work;
 };
 
 static irqreturn_t fpc1020_irq_handler(int irq, void *handle);
@@ -462,41 +446,6 @@ static ssize_t wakeup_enable_set(struct device *dev,
 static DEVICE_ATTR(wakeup_enable, S_IWUSR, NULL, wakeup_enable_set);
 
 /**
- * sysfs node for controlling the wakelock.
- */
-static ssize_t handle_wakelock_cmd(struct device *dev,
-	struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct  fpc1020_data *fpc1020 = dev_get_drvdata(dev);
-	ssize_t ret = count;
-
-	mutex_lock(&fpc1020->lock);
-	if (!strncmp(buf, RELEASE_WAKELOCK_W_V,
-		min(count, strlen(RELEASE_WAKELOCK_W_V)))) {
-		if (fpc1020->nbr_irqs_received_counter_start ==
-				fpc1020->nbr_irqs_received) {
-			__pm_relax(fpc1020->ttw_wl);
-		} else {
-			dev_dbg(dev, "Ignore releasing of wakelock %d != %d",
-				fpc1020->nbr_irqs_received_counter_start,
-				fpc1020->nbr_irqs_received);
-		}
-	} else if (!strncmp(buf, RELEASE_WAKELOCK, min(count,
-				strlen(RELEASE_WAKELOCK)))) {
-		__pm_relax(fpc1020->ttw_wl);
-	} else if (!strncmp(buf, START_IRQS_RECEIVED_CNT,
-			min(count, strlen(START_IRQS_RECEIVED_CNT)))) {
-		fpc1020->nbr_irqs_received_counter_start =
-		fpc1020->nbr_irqs_received;
-	} else
-		ret = -EINVAL;
-	mutex_unlock(&fpc1020->lock);
-
-	return ret;
-}
-static DEVICE_ATTR(handle_wakelock, S_IWUSR, NULL, handle_wakelock_cmd);
-
-/**
  * sysf node to check the interrupt status of the sensor, the interrupt
  * handler should perform sysf_notify to allow userland to poll the node.
  */
@@ -525,25 +474,6 @@ static ssize_t irq_ack(struct device *dev,
 	return count;
 }
 static DEVICE_ATTR(irq, S_IRUSR | S_IWUSR, irq_get, irq_ack);
-
-static ssize_t fingerdown_wait_set(struct device *dev,
-				   struct device_attribute *attr,
-				   const char *buf, size_t count)
-{
-	struct fpc1020_data *fpc1020 = dev_get_drvdata(dev);
-
-	dev_info(fpc1020->dev, "%s -> %s\n", __func__, buf);
-	if (!strncmp(buf, "enable", strlen("enable")))
-		fpc1020->wait_finger_down = true;
-	else if (!strncmp(buf, "disable", strlen("disable")))
-		fpc1020->wait_finger_down = false;
-	else
-		return -EINVAL;
-
-	return count;
-}
-
-static DEVICE_ATTR(fingerdown_wait, S_IWUSR, NULL, fingerdown_wait_set);
 
 #ifdef CONFIG_FPC_COMPAT
 static ssize_t compatible_all_set(struct device *dev,
@@ -660,10 +590,8 @@ static struct attribute *attributes[] = {
 	&dev_attr_regulator_enable.attr,
 	&dev_attr_hw_reset.attr,
 	&dev_attr_wakeup_enable.attr,
-	&dev_attr_handle_wakelock.attr,
 	&dev_attr_clk_enable.attr,
 	&dev_attr_irq.attr,
-	&dev_attr_fingerdown_wait.attr,
 #ifdef CONFIG_FPC_COMPAT
 	&dev_attr_compatible_all.attr,
 #endif
@@ -678,24 +606,11 @@ static irqreturn_t fpc1020_irq_handler(int irq, void *handle)
 {
 	struct fpc1020_data *fpc1020 = handle;
 
-	dev_dbg(fpc1020->dev, "%s\n", __func__);
-	pr_info("%s start\n", __func__);
-
-	mutex_lock(&fpc1020->lock);
-	if (atomic_read(&fpc1020->wakeup_enabled)) {
-		fpc1020->nbr_irqs_received++;
-		__pm_wakeup_event(fpc1020->ttw_wl,
-					FPC_TTW_HOLD_TIME);
-	}
-	mutex_unlock(&fpc1020->lock);
+	__pm_wakeup_event(fpc1020->ttw_wl, FPC_TTW_HOLD_TIME);
 
 	sysfs_notify(&fpc1020->dev->kobj, NULL, dev_attr_irq.attr.name);
 
-	pr_info("%s %d,%d,%d",__func__,fpc1020->wait_finger_down,fpc1020->prepared,fpc1020->fb_black);
-	if (fpc1020->wait_finger_down && fpc1020->fb_black && fpc1020->prepared) {
-		pr_info("%s enter fingerdown & fb_black then schedule_work\n", __func__);
-		fpc1020->wait_finger_down = false;
-	}
+	pr_info("%s %d",__func__,fpc1020->prepared);
 
 	return IRQ_HANDLED;
 }
@@ -838,12 +753,6 @@ static int fpc1020_probe(struct platform_device *pdev)
 	}
 #else
 	mutex_init(&fpc1020->lock);
-/* BSP.FP - 2022.6.19 - fpc HWID_FP add statrt*/
-#ifdef CONFIG_HQ_SYSFS_SUPPORT
-		dev_info(dev, "%s hq_regiser_hw_info\n", __func__);
-		hq_regiser_hw_info(HWID_FP, "FPC");
-#endif
-/* BSP.FP - 2022.6.19 - fpc HWID_FP add end*/
 	fpc1020->ttw_wl = wakeup_source_register(dev, "fpc_ttw_wl");
 	if (!fpc1020->ttw_wl)
 		return -ENOMEM;
@@ -855,8 +764,6 @@ static int fpc1020_probe(struct platform_device *pdev)
 	}
 #endif
 	dev_info(dev, "%s: ok\n", __func__);
-	fpc1020->fb_black = false;
-	fpc1020->wait_finger_down = false;
 exit:
 	return rc;
 }

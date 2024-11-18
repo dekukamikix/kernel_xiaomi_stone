@@ -87,6 +87,24 @@ function getclang() {
       ClangPath="${MainClangPath}"-zyc
       export PATH="${ClangPath}/bin:${PATH}"
     fi
+  elif [ "${ClangName}" = "greenforce" ]; then
+    if [ ! -f "${MainClangPath}-greenforce/bin/clang" ]; then
+      echo "[!] Clang is set to greenforce, cloning it..."
+      mkdir -p ${MainClangPath}-greenforce
+      cd clang-greenforce
+      wget -q https://raw.githubusercontent.com/greenforce-project/greenforce_clang/main/get_latest_url.sh
+      source get_latest_url.sh; rm -rf get_latest_url.sh
+      wget -q $LATEST_URL_GZ -O "greenforce-clang.tar.gz"
+      tar -xf greenforce-clang.tar.gz
+      ClangPath="${MainClangPath}"-greenforce
+      export PATH="${ClangPath}/bin:${PATH}"
+      rm -f greenforce-clang.tar.gz
+      cd ..
+    else
+      echo "[!] Clang already exists. Skipping..."
+      ClangPath="${MainClangPath}"-greenforce
+      export PATH="${ClangPath}/bin:${PATH}"
+    fi
   else
     echo "[!] Incorrect clang name. Check config.env for clang names."
     exit 1
@@ -150,15 +168,15 @@ function kernelsu() {
 # Enviromental variable
 DEVICE_MODEL="Poco X5 5G"
 DEVICE_CODENAME="stone"
-BUILD_TIME="$(TZ="Asia/Jakarta" date "+%m%d%Y")"
-export DEVICE_DEFCONFIG="holi-qgki_defconfig"
+BUILD_TIME="$(TZ="Asia/Jakarta" date "+%Y%m%d")"
+export DEVICE_DEFCONFIG="stone_defconfig"
 export ARCH="arm64"
 export KBUILD_BUILD_USER="ichirooo"
 export KBUILD_BUILD_HOST="ThinkPad-T480"
 export KERNEL_NAME="Mechatron-X5"
 export SUBLEVEL="v5.4.$(cat "${MainPath}/Makefile" | grep "SUBLEVEL =" | sed 's/SUBLEVEL = *//g')"
 IMAGE="${MainPath}/out/arch/arm64/boot/Image"
-DTB_IMAGE="${MainPath}/out/arch/arm64/boot/dts/vendor/xiaomi/${DEVICE_CODENAME}.dtb"
+DTB_IMAGE="${MainPath}/out/arch/arm64/boot/dts/vendor/xiaomi/moonstone.dtb"
 CORES="$(nproc --all)"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 
@@ -166,7 +184,7 @@ BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 START=$(date +"%s")
 
 compile(){
-if [ "$ClangName" = "proton" ]; then
+if [ "$ClangName" = "proton" ] || [ "$ClangName" = "greenforce" ]; then
   sed -i 's/CONFIG_LLVM_POLLY=y/# CONFIG_LLVM_POLLY is not set/g' ${MainPath}/arch/$ARCH/configs/$DEVICE_DEFCONFIG || echo ""
 else
   sed -i 's/# CONFIG_LLVM_POLLY is not set/CONFIG_LLVM_POLLY=y/g' ${MainPath}/arch/$ARCH/configs/$DEVICE_DEFCONFIG || echo ""
@@ -191,6 +209,7 @@ make -j"$CORES" ARCH=$ARCH O=out \
       git clone --depth=1 ${AnyKernelRepo} -b ${AnyKernelBranch} ${AnyKernelPath}
       cp $IMAGE ${AnyKernelPath}
       if [[ -f "$DTB_IMAGE" ]]; then
+        rm -rf ${AnyKernelPath}/dtb
         cp $DTB_IMAGE ${AnyKernelPath}/dtb
       fi
    else
@@ -208,17 +227,16 @@ KERNEL_ZIP="${KERNEL_NAME}-${DEVICE_CODENAME}-${BUILD_TIME}.zip"
 function zipping() {
     cd ${AnyKernelPath} || exit 1
     if [ "$KERNELSU" = "yes" ];then
+      VARIANT="[KSU] "
       sed -i "s/kernel.string=.*/kernel.string=${KERNEL_NAME} ${SUBLEVEL} ${KERNEL_VARIANT} by ${KBUILD_BUILD_USER} for ${DEVICE_MODEL} (${DEVICE_CODENAME}) | KernelSU Version: ${KERNELSU_VERSION}/g" anykernel.sh
     else
+      VARIANT="[Non-KSU] "
       sed -i "s/kernel.string=.*/kernel.string=${KERNEL_NAME} ${SUBLEVEL} ${KERNEL_VARIANT} by ${KBUILD_BUILD_USER} for ${DEVICE_MODEL} (${DEVICE_CODENAME})/g" anykernel.sh
     fi
-    zip -r9 ${KERNEL_ZIP} * -x .git README.md *placeholder
+    zip -r9 "${VARIANT}${KERNEL_ZIP}" * -x .git README.md *placeholder
+    mv "${VARIANT}${KERNEL_ZIP}" ~/
     cd ..
-
-    if [[ -f "/var/www/html/${KERNEL_ZIP}" ]]; then
-      sudo rm -rf /var/www/html/${KERNEL_ZIP}
-    fi
-    sudo mv ${AnyKernelPath}/${KERNEL_ZIP} /var/www/html/
+    sudo rm -rf ${AnyKernelPath}
     cleanup
 }
 
@@ -226,7 +244,6 @@ function zipping() {
 function cleanup() {
     cd ${MainPath}
     if [ "$CLEANUP" = "yes" ];then
-      sudo rm -rf ${AnyKernelPath}
       sudo rm -rf out/
     fi
 }

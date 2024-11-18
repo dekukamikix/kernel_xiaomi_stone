@@ -914,6 +914,11 @@ static ssize_t devkmsg_write(struct kiocb *iocb, struct iov_iter *from)
 		}
 	}
 
+	if (strstr(line, "healthd") || strstr(line, "logd") ||
+	    strstr(line, "DM_DEV_STATUS") || strstr(line, "Untracked pid") ||
+	    strstr(line, "usb_gadget") || strstr(line, "LibBpfLoader"))
+		return len;
+
 	devkmsg_emit(facility, level, "%s", line);
 	return ret;
 }
@@ -2321,7 +2326,7 @@ void suspend_console(void)
 {
 	if (!console_suspend_enabled)
 		return;
-	pr_info("Suspending console(s) (use no_console_suspend to debug)\n");
+
 	console_lock();
 	console_suspended = 1;
 	up_console_sem();
@@ -3048,7 +3053,7 @@ static void wake_up_klogd_work_func(struct irq_work *irq_work)
 
 static DEFINE_PER_CPU(struct irq_work, wake_up_klogd_work) = {
 	.func = wake_up_klogd_work_func,
-	.flags = IRQ_WORK_LAZY,
+	.flags = ATOMIC_INIT(IRQ_WORK_LAZY),
 };
 
 void wake_up_klogd(void)
